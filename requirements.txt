@@ -1,13 +1,11 @@
-# Phase 3: Label Engineering Dependencies
+# Core dependencies
 numpy>=1.21.0
 pandas>=1.3.0
 
-# Full Project Dependencies (for reference)
-# Phase 1-2:
-# h5py>=3.0.0
-# scipy>=1.7.0
+# Data loading (HDF5, signal processing)
+h5py>=3.0.0
+scipy>=1.7.0
 
-# Phase 4-5:
-# tensorflow>=2.8.0
-# keras>=2.8.0
-# lifelines>=0.27.0
+# Deep learning and survival analysis
+tensorflow>=2.8.0
+lifelines>=0.27.0
