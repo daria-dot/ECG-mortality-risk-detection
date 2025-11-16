@@ -34,6 +34,12 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Initialize Streamlit session state for ECG data so it persists across reruns
+if "ecg_data" not in st.session_state:
+    st.session_state.ecg_data = None
+if "exam_id" not in st.session_state:
+    st.session_state.exam_id = None
+
 # Custom CSS for better styling
 st.markdown("""
 <style>
@@ -82,6 +88,69 @@ def load_model():
     except Exception as e:
         st.error(f"Error loading model: {str(e)}")
         return None
+
+
+def generate_demo_ecg(pattern: str = "Normal sinus rhythm") -> np.ndarray:
+    """Generate synthetic 8‑lead ECGs for demo / library mode.
+
+    These are NOT real ECGs, but they look ECG‑like and allow you to
+    demonstrate the app end‑to‑end without an HDF5 bank.
+    """
+    length = 4096
+    n_leads = 8
+    fs = 400  # Hz
+    duration = length / fs
+    t = np.linspace(0, duration, length)
+
+    # Choose base heart rate (Hz) per pattern
+    if pattern == "Tachycardia":
+        base_hr_hz = 1.8   # ~108 bpm
+        noise_scale = 0.06
+        st_deviation = -0.05
+        seed = 2
+    elif pattern == "Bradycardia":
+        base_hr_hz = 0.8   # ~48 bpm
+        noise_scale = 0.04
+        st_deviation = 0.01
+        seed = 3
+    elif pattern == "High‑risk pattern":
+        base_hr_hz = 1.5   # slightly high HR
+        noise_scale = 0.08
+        st_deviation = -0.12
+        seed = 4
+    elif pattern == "Noisy / poor quality":
+        base_hr_hz = 1.2
+        noise_scale = 0.15
+        st_deviation = 0.0
+        seed = 5
+    else:  # "Normal sinus rhythm" (default)
+        base_hr_hz = 1.2   # ~72 bpm
+        noise_scale = 0.03
+        st_deviation = 0.0
+        seed = 1
+
+    rng = np.random.default_rng(seed)
+    ecg = np.zeros((length, n_leads), dtype=np.float32)
+
+    for lead in range(n_leads):
+        phase = rng.uniform(0, 2 * np.pi)
+        # Base P‑QRS‑T‑like waveform using a few harmonics
+        signal = (
+            0.6 * np.sin(2 * np.pi * base_hr_hz * t + phase) +
+            0.2 * np.sin(2 * np.pi * base_hr_hz * 2 * t + phase / 2) +
+            0.1 * np.sin(2 * np.pi * base_hr_hz * 3 * t - phase / 3)
+        )
+
+        # Simple "ST"‑like offset to make high‑risk pattern look different
+        signal = signal + st_deviation
+
+        # Add lead‑specific small scaling and noise
+        scale = 1.0 + 0.1 * (lead - n_leads / 2) / (n_leads / 2)
+        noise = noise_scale * rng.standard_normal(length)
+        ecg[:, lead] = (signal * scale + noise).astype(np.float32)
+
+    return ecg
+
 
 def process_ecg_input(ecg_data):
     """
@@ -270,18 +339,28 @@ def main():
     # Input method selection
     input_method = st.radio(
         "Select input method:",
-        ["Use Sample ECG", "Upload ECG Data", "Manual Entry (Demo)"]
+        [
+            "Use Sample ECG",
+            "Upload ECG Data",
+            "Demo ECG Library",
+            "Manual Entry (Demo)",
+        ],
     )
-    
-    ecg_data = None
-    exam_id = None
+
+    # Start from whatever is in session_state so ECG persists across reruns
+    ecg_data = st.session_state.ecg_data
+    exam_id = st.session_state.exam_id
     
     if input_method == "Use Sample ECG":
-        if st.button("Load Sample ECG"):
+        if st.button("Load Sample ECG", key="btn_load_sample"):
             with st.spinner("Loading sample ECG..."):
-                ecg_data, exam_id = load_sample_ecg()
+                ecg, ex_id = load_sample_ecg()
                 
-                if ecg_data is not None:
+                if ecg is not None:
+                    st.session_state.ecg_data = ecg
+                    st.session_state.exam_id = ex_id
+                    ecg_data = ecg
+                    exam_id = ex_id
                     st.success(f"Sample ECG loaded successfully! (Exam ID: {exam_id})")
                     
                     # Display ECG shape info
@@ -289,7 +368,7 @@ def main():
                     st.write(f"Duration: {ecg_data.shape[0]/400:.1f} seconds (assuming 400Hz)")
                 else:
                     st.error("Failed to load sample ECG")
-    
+
     elif input_method == "Upload ECG Data":
         st.info("Upload a numpy array file (.npy) containing ECG data with shape (4096, 8)")
         
@@ -297,36 +376,48 @@ def main():
         
         if uploaded_file is not None:
             try:
-                ecg_data = np.load(uploaded_file)
+                ecg = np.load(uploaded_file)
                 
-                if ecg_data.shape == (4096, 8):
+                if ecg.shape == (4096, 8):
+                    st.session_state.ecg_data = ecg
+                    st.session_state.exam_id = None
+                    ecg_data = ecg
                     st.success("ECG data loaded successfully!")
                     st.write(f"ECG Shape: {ecg_data.shape}")
                 else:
-                    st.error(f"Invalid shape: {ecg_data.shape}. Expected (4096, 8)")
-                    ecg_data = None
+                    st.error(f"Invalid shape: {ecg.shape}. Expected (4096, 8)")
             except Exception as e:
                 st.error(f"Error loading file: {str(e)}")
-    
+
+    elif input_method == "Demo ECG Library":
+        st.info("Select a pre‑generated demo ECG from the library.")
+
+        demo_options = {
+            "Normal sinus rhythm": "Regular rhythm, moderate noise (synthetic)",
+            "Tachycardia": "Faster heart rate pattern (synthetic)",
+            "Bradycardia": "Slower heart rate pattern (synthetic)",
+            "High‑risk pattern": "ECG‑like signal with ST‑segment shift (synthetic)",
+            "Noisy / poor quality": "Very noisy tracing to show robustness / limitations",
+        }
+
+        choice = st.selectbox("Choose demo ECG:", list(demo_options.keys()))
+        st.caption(demo_options[choice])
+
+        if st.button("Load Selected Demo ECG", key="btn_load_demo_lib"):
+            ecg = generate_demo_ecg(choice)
+            st.session_state.ecg_data = ecg
+            st.session_state.exam_id = None
+            ecg_data = ecg
+            st.success("Demo ECG loaded from library.")
+
     elif input_method == "Manual Entry (Demo)":
-        st.info("Generating random ECG data for demonstration purposes")
+        st.info("Generate a random synthetic ECG for a quick demo.")
         
-        if st.button("Generate Demo ECG"):
-            # Generate realistic-looking synthetic ECG data
-            np.random.seed(42)
-            t = np.linspace(0, 10.24, 4096)  # 10.24 seconds at 400Hz
-            
-            ecg_data = np.zeros((4096, 8))
-            for lead in range(8):
-                # Simulate ECG-like signal with different characteristics per lead
-                base_freq = 1.2  # Heart rate ~72 bpm
-                ecg_data[:, lead] = (
-                    0.5 * np.sin(2 * np.pi * base_freq * t + np.random.rand() * 2 * np.pi) +
-                    0.2 * np.sin(2 * np.pi * base_freq * 2 * t + np.random.rand() * 2 * np.pi) +
-                    0.1 * np.sin(2 * np.pi * base_freq * 3 * t + np.random.rand() * 2 * np.pi) +
-                    0.05 * np.random.randn(4096)
-                )
-            
+        if st.button("Generate Demo ECG", key="btn_generate_demo_random"):
+            ecg = generate_demo_ecg("Normal sinus rhythm")
+            st.session_state.ecg_data = ecg
+            st.session_state.exam_id = None
+            ecg_data = ecg
             st.success("Demo ECG generated!")
             st.write(f"ECG Shape: {ecg_data.shape}")
     
@@ -360,11 +451,14 @@ def main():
     # Prediction section
     st.header("🔮 Mortality Risk Prediction")
     
-    if ecg_data is not None:
-        if st.button("Predict Risk", type="primary"):
+    # Always read from session_state here to make sure we use the latest ECG
+    ecg_for_prediction = st.session_state.ecg_data
+    
+    if ecg_for_prediction is not None:
+        if st.button("Predict Risk", type="primary", key="btn_predict"):
             with st.spinner("Analyzing ECG and calculating risk..."):
                 # Process ECG
-                processed_ecg = process_ecg_input(ecg_data)
+                processed_ecg = process_ecg_input(ecg_for_prediction)
                 
                 if processed_ecg is not None:
                     # Make predictions
