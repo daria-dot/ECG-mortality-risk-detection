@@ -1,4 +1,4 @@
-# ECG-mortality-risk-detection
+# ECG-mortality-risk-detection (BIOHACKATHON SUBMISSION)
 
 This repository contains code for an ECG-based mortality risk prediction project, structured in phases.
 
